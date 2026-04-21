@@ -58,9 +58,9 @@
  */
 bool nfc_initiator_mifare_cmd(nfc_device *pnd, const mifare_cmd mc, const uint8_t ui8Block, mifare_param *pmp)
 {
-  uint8_t abtRx[265];
+  uint8_t abtRx[262];
   size_t szParamLen;
-  uint8_t abtCmd[265];
+  uint8_t abtCmd[262];
   // bool    bEasyFraming;
 
   abtCmd[0] = mc; // The MIFARE Classic command
@@ -165,9 +165,9 @@ bool nfc_initiator_mifare_cmd(nfc_device *pnd, const mifare_cmd mc, const uint8_
  */
 int mfoc_nfc_initiator_mifare_cmd(nfc_device *pnd, const mifare_cmd mc, const uint8_t ui8Block, mifare_param *pmp)
 {
-  uint8_t abtRx[265];
+  uint8_t abtRx[262];
   size_t szParamLen;
-  uint8_t abtCmd[265];
+  uint8_t abtCmd[262];
 
   abtCmd[0] = mc; // The MIFARE Classic command
   abtCmd[1] = ui8Block; // The block address (1K=0x00..0x39, 4K=0x00..0xff)

@@ -56,7 +56,9 @@ typedef enum {
   MC_TRANSFER = 0xB0,
   MC_DECREMENT = 0xC0,
   MC_INCREMENT = 0xC1,
-  MC_STORE = 0xC2
+  MC_STORE = 0xC2,
+  MC_MAGIC_WUPA = 0x40,
+  MC_MAGIC_WUPB = 0x43
 } mifare_cmd;
 
 // MIFARE command params

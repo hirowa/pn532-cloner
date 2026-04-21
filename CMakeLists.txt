@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.22)
-project (PN532-Cloner)
+project (PN532-Cloner-v4)
 set (CMAKE_C_STANDARD 11)
 
 # Uncomment the following line to get more verbose output from CMake
