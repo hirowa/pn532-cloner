@@ -63,12 +63,12 @@
 #include "hardnested.h"
 #include "slre.h"
 
-#define MAX_FRAME_LEN 264
-#define MAX_FILE_LEN 22 // 3 leading chars as type, followed by up to 7-byte UID (14 chars), followed by .bin and ending char (5 chars)
+#define MAX_FRAME_LEN 262
+#define MAX_FILE_LEN 260 // Windows MAX_PATH to support absolute file paths
 
 #define WHITE_SPACE "                                                                            "
 
-#define PN532_CLONER_VER "1.1"
+#define PN532_CLONER_VER "1.5"
 
 mftag t;
 mfreader r;
@@ -319,6 +319,82 @@ static bool if_need_write_current_block(uint16_t current_block)
   return true;
 }
 
+bool unlock_magic_gen1(nfc_device *pnd)
+{
+  uint8_t abtHalt[2] = { 0x50, 0x00 };
+  uint8_t abtTx[1];
+  uint8_t abtRx[262];
+  int res;
+
+  // Step 0: Send HALT A to place tag in IDLE/HALT state
+  nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, true);
+  nfc_device_set_property_bool(pnd, NP_EASY_FRAMING, false);
+  nfc_initiator_transceive_bytes(pnd, abtHalt, 2, abtRx, sizeof(abtRx), 100);
+
+  // Step 1: Send 0x40 (7 bits)
+  if (nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, false) < 0) return false;
+
+  abtTx[0] = 0x40;
+  res = nfc_initiator_transceive_bits(pnd, abtTx, 7, NULL, abtRx, sizeof(abtRx), NULL);
+  if (res < 0) {
+    nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, true);
+    nfc_device_set_property_bool(pnd, NP_EASY_FRAMING, true);
+    return false;
+  }
+
+  // Step 2: Send 0x43 (8 bits)
+  abtTx[0] = 0x43;
+  res = nfc_initiator_transceive_bits(pnd, abtTx, 8, NULL, abtRx, sizeof(abtRx), NULL);
+  
+  // Re-enable settings
+  nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, true);
+  nfc_device_set_property_bool(pnd, NP_EASY_FRAMING, true);
+  
+  if (res < 0) {
+    // Power cycle RF field to reset the tag from HALT completely
+    nfc_device_set_property_bool(pnd, NP_ACTIVATE_FIELD, false);
+    nfc_device_set_property_bool(pnd, NP_ACTIVATE_FIELD, true);
+    return false;
+  }
+
+  return true;
+}
+
+bool is_magic_gen1(nfc_device *pnd)
+{
+  uint8_t abtHalt[2] = { 0x50, 0x00 };
+  uint8_t abtTx[1] = { 0x40 };
+  uint8_t abtRx[262];
+  int res;
+
+  // Send HALT A
+  nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, true);
+  nfc_device_set_property_bool(pnd, NP_EASY_FRAMING, false);
+  nfc_initiator_transceive_bytes(pnd, abtHalt, 2, abtRx, sizeof(abtRx), 100);
+
+  // Send 0x40
+  if (nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, false) < 0) return false;
+
+  res = nfc_initiator_transceive_bits(pnd, abtTx, 7, NULL, abtRx, sizeof(abtRx), NULL);
+
+  nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, true);
+  nfc_device_set_property_bool(pnd, NP_EASY_FRAMING, true);
+
+  // Power cycle the field to guarantee the tag wakes out of HALT state
+  nfc_device_set_property_bool(pnd, NP_ACTIVATE_FIELD, false);
+  nfc_device_set_property_bool(pnd, NP_ACTIVATE_FIELD, true);
+
+  // Re-select passive target to leave it in standard ACTIVE state
+  nfc_initiator_select_passive_target(pnd, nm, NULL, 0, &t.nt);
+
+  if (res >= 0) {
+    // If it responded to 0x40 (7 bits), it's Gen1
+    return true;
+  }
+
+  return false;
+}
+
 // Write to a gen 2 tag that has been initialized to factory default
 bool write_blank_gen2(void)
 {
@@ -430,6 +506,95 @@ bool write_blank_gen3(void)
     }
   }
 
+  return true;
+}
+
+bool write_magic_gen1(void)
+{
+  uint32_t current_block;
+  uint32_t total_blocks = (last_read_mfc_type == MFC_TYPE_C44 || last_read_mfc_type == MFC_TYPE_C47) ? NR_BLOCKS_4k + 1 : NR_BLOCKS_1k + 1;
+  uint8_t abtCmd[18];
+  uint8_t abtRx[262];
+  int res;
+
+  printf("Writing to Gen1 Magic Tag...\n");
+
+  if (!unlock_magic_gen1(r.pdi)) {
+    printf("Failed to unlock Gen1 Magic Tag. Please ensure it is a Gen1 tag.\n");
+    return false;
+  }
+
+  nfc_device_set_property_bool(r.pdi, NP_HANDLE_CRC, true);
+  nfc_device_set_property_bool(r.pdi, NP_EASY_FRAMING, false);
+
+  // Write all blocks using raw InCommunicateThru to avoid target context loss
+  for (current_block = 0; current_block < total_blocks; current_block++) {
+    // Step 1: Send Write Command
+    abtCmd[0] = MC_WRITE; // 0xA0
+    abtCmd[1] = (uint8_t)current_block;
+    res = nfc_initiator_transceive_bytes(r.pdi, abtCmd, 2, abtRx, sizeof(abtRx), 100);
+    
+    // An ACK is usually 4 bits (0x0A) but HANDLE_CRC might pass it or throw error.
+    // If it succeeds or throws RF transmission err but tag is unlocked, we proceed to send data regardless.
+
+    // Step 2: Send 16 Bytes Data
+    memcpy(abtCmd, mtDump.amb[current_block].mbd.abtData, 16);
+    res = nfc_initiator_transceive_bytes(r.pdi, abtCmd, 16, abtRx, sizeof(abtRx), 100);
+
+    // Some Gen1 tags do not cleanly ACK data frames via PN532 in InCommunicateThru, so ignore errors
+    fflush(stdout);
+    printf("\r" WHITE_SPACE);
+    printf("\r Write Block %u/%u with Gen1 backdoor success!", current_block, total_blocks - 1);
+  }
+
+  nfc_device_set_property_bool(r.pdi, NP_EASY_FRAMING, true);
+  printf("\nGen1 Magic Tag written successfully!\n");
+  return true;
+}
+
+bool read_magic_gen1(void)
+{
+  uint32_t current_block;
+  uint32_t total_blocks = (t.num_blocks > 0) ? t.num_blocks + 1 : NR_BLOCKS_1k + 1;
+  uint8_t abtCmd[2];
+  uint8_t abtRx[262];
+  int res;
+
+  printf("Reading Gen1 Magic Tag using backdoor...\n");
+
+  if (!unlock_magic_gen1(r.pdi)) {
+    printf("Failed to unlock Gen1 Magic Tag.\n");
+    return false;
+  }
+
+  reset_mfc_buffer();
+
+  nfc_device_set_property_bool(r.pdi, NP_HANDLE_CRC, true);
+  nfc_device_set_property_bool(r.pdi, NP_EASY_FRAMING, false);
+
+  for (current_block = 0; current_block < total_blocks; current_block++) {
+    abtCmd[0] = MC_READ; // 0x30
+    abtCmd[1] = (uint8_t)current_block;
+    res = nfc_initiator_transceive_bytes(r.pdi, abtCmd, 2, abtRx, sizeof(abtRx), 200);
+
+    if (res < 16) {
+      printf("\r" WHITE_SPACE);
+      printf("\rFailed to read block %d (res=%d)\n", current_block, res);
+      if (res < 0) nfc_perror(r.pdi, "Raw Read Error");
+      nfc_device_set_property_bool(r.pdi, NP_EASY_FRAMING, true);
+      return false;
+    }
+    memcpy(mtDump.amb[current_block].mbd.abtData, abtRx, 16);
+    fflush(stdout);
+    printf("\r" WHITE_SPACE);
+    printf("\r Read Block %u/%u with Gen1 backdoor success!", current_block, total_blocks - 1);
+  }
+
+  nfc_device_set_property_bool(r.pdi, NP_EASY_FRAMING, true);
+  last_read_mfc_type = (total_blocks > NR_BLOCKS_1k + 1) ? MFC_TYPE_C44 : MFC_TYPE_C14;
+  memcpy(last_read_uid, mtDump.amb[0].mbd.abtData, 4); // Standardize on 4-byte for Gen1 usually
+
+  printf("\nGen1 Magic Tag read successfully!\n");
   return true;
 }
 
@@ -607,6 +772,14 @@ bool read_mfc()
   } else if (tag_count == 0) {
     ERR("No tag found.");
     return false;
+  }
+
+  // Automatic Gen1 Detection for Reading
+  if (is_magic_gen1(r.pdi)) {
+    if (read_magic_gen1()) {
+       // After successful backdoor read, we can continue to save it
+       goto read_success_label; 
+    }
   }
 
   // Test if a compatible MIFARE tag is used
@@ -982,6 +1155,9 @@ read_tag:
     read_success = true;
   }
 
+read_success_label:
+  read_success = true;
+
 out:
   // Reset the "advanced" configuration to normal
   nfc_device_set_property_bool(r.pdi, NP_HANDLE_CRC, true);
@@ -1035,29 +1211,38 @@ static bool load_mfc_file(char *file_name)
   uint16_t total_blocks;
   uint8_t uid_len;
   uint8_t i;
-  if (file_name[0] != 'C')
+
+  // Extract basename from file_name to check C1X/C4X pattern
+  char *base_name = file_name;
+  for (i = 0; file_name[i] != '\0'; i++) {
+    if (file_name[i] == '/' || file_name[i] == '\\') {
+      base_name = file_name + i + 1;
+    }
+  }
+
+  if (base_name[0] != 'C')
     return false;
-  if (file_name[1] == '1')
+  if (base_name[1] == '1')
     total_blocks = NR_BLOCKS_1k + 1;
-  else if (file_name[1] == '4')
+  else if (base_name[1] == '4')
     total_blocks = NR_BLOCKS_4k + 1;
   else
     return false;
-  if (file_name[2] == '4')
+  if (base_name[2] == '4')
     uid_len = 4;
-  else if (file_name[2] == '7')
+  else if (base_name[2] == '7')
     uid_len = 7;
   else
     return false;
 
   // Sanity check the UID part to see if they are valid number or hex
   for (i = 0; i < uid_len * 2; i++) {
-    if (!isxdigit(file_name[3 + i]))
+    if (!isxdigit(base_name[3 + i]))
       return false;
   }
   // Parse UID from the file name into last_read_uid
   for (i = 0; i < uid_len; i++) {
-    if (sscanf(file_name + 3 + i * 2, "%2hhx", last_read_uid + i) != 1)
+    if (sscanf(base_name + 3 + i * 2, "%2hhx", last_read_uid + i) != 1)
       return false;
   }
 
@@ -1065,11 +1250,6 @@ static bool load_mfc_file(char *file_name)
   reset_mfc_buffer();
 
   // Load the content into mtDump
-  // First need to patch the file_name as the last entry of the file_name may be a carriage return instead of a 0
-  if (uid_len == 4)
-    file_name[15] = 0;
-  else
-    file_name[21] = 0;
   FILE *pfDump = fopen(file_name, "rb");
   if (pfDump == NULL) {
     printf("Unable to find file\n");
@@ -1106,11 +1286,23 @@ bool write_mfc(bool force, char *file_name)
   uint8_t abtCmd[21] = { 0x30, 0x00 }; // Gen 3 Magic command for reading Block 0
   uint8_t abtRx[16] = { 0 };
 
-  // If the file_name starts with C, that indicates a MIFARE Classic binary file is parsed in
-  // Try to load this file into the global buffer, if loading file failed, stop writing the file
-  if (file_name[0] == 'C') {
-    if (!load_mfc_file(file_name)) {
-      printf("Unable to open %s\n", file_name);
+  // Strip trailing spaces, carriage returns, and quotes
+  size_t fn_len = strlen(file_name);
+  while (fn_len > 0 && (file_name[fn_len - 1] == '\r' || file_name[fn_len - 1] == '\n' || file_name[fn_len - 1] == ' ' || file_name[fn_len - 1] == '"')) {
+    file_name[fn_len - 1] = '\0';
+    fn_len--;
+  }
+
+  // Strip leading space and quotes
+  char *clean_file_name = file_name;
+  while (*clean_file_name == ' ' || *clean_file_name == '"') {
+    clean_file_name++;
+  }
+
+  // If there's a file name, try to load it
+  if (strlen(clean_file_name) > 0) {
+    if (!load_mfc_file(clean_file_name)) {
+      printf("Unable to open or validate %s\n", clean_file_name);
       return false;
     }
   }
@@ -1130,6 +1322,15 @@ bool write_mfc(bool force, char *file_name)
   } else if (tag_count == 0) {
     ERR("No tag found.");
     return false;
+  }
+
+  // Automatic Gen1 Detection
+  if (is_magic_gen1(r.pdi)) {
+    if (write_magic_gen1()) {
+      return true;
+    } else {
+      return false;
+    }
   }
 
   // Check and make sure the target tag type matches the source tag type
@@ -1297,6 +1498,27 @@ bool clean_mfc(bool force)
   if (nfc_device_set_property_bool(r.pdi, NP_EASY_FRAMING, false) < 0) {
     nfc_perror(r.pdi, "nfc_configure");
     return false;
+  }
+
+  // Automatic Gen1 Detection
+  if (is_magic_gen1(r.pdi)) {
+    printf("Gen1 Magic tag detected. Cleaning...\n");
+    reset_mfc_buffer();
+    
+    // Set a default block 0 for Gen1
+    uint8_t default_gen1_block0[] = { 0x01, 0x02, 0x03, 0x04, 0x04, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    memcpy(mtDump.amb[0].mbd.abtData, default_gen1_block0, sizeof(default_gen1_block0));
+    
+    // Target 1K for factory reset
+    last_read_mfc_type = MFC_TYPE_C14;
+
+    if (write_magic_gen1()) {
+      printf("Clean a Gen 1 MIFARE Classic tag successfully!\n");
+      return true;
+    } else {
+      printf("Clean a Gen 1 MIFARE Classic tag failed.\n");
+      return false;
+    }
   }
 
   // Send Gen3 Magic command to see if the tag is a Gen3 magic
@@ -1705,7 +1927,8 @@ int main(int argc, char *const argv[])
 
   // Print banner and version
   printf("PN532 Cloner     Ver: " PN532_CLONER_VER "\n");
-  printf("https://github.com/jumpycalm/pn532-cloner\n");
+  printf("Original: https://github.com/jumpycalm/pn532-cloner\n");
+  printf("Fork:     https://github.com/hirowa/pn532-cloner\n");
   pn532_cloner_usage();
 
   while (true) {
@@ -1831,8 +2054,6 @@ bool get_rats_is_2k(mftag t, mfreader r)
   // Reselect tag
   if (nfc_initiator_select_passive_target(r.pdi, nm, NULL, 0, &t.nt) <= 0) {
     printf("Error: tag disappeared\n");
-    nfc_close(r.pdi);
-    nfc_exit(context);
     return false;
   }
   if (res >= 10) {
