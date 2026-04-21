@@ -22,7 +22,7 @@ MIFARE Classic and MIFARE Plus in Security Level 0 or 1 mode.
 
 ## Write
 
-Gen 3 Magic MIFARE Classic, Gen 2 Magic MIFARE Classic.
+Gen 3 Magic MIFARE Classic, Gen 2 Magic MIFARE Classic, Gen 1 Magic MIFARE Classic (Including backdoor detection and factory reset).
 
 # Usage
 
