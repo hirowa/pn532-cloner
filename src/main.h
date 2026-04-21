@@ -62,6 +62,7 @@ long long unsigned int bytes_to_num(uint8_t *src, uint32_t len);
 bool unlock_magic_gen1(nfc_device *pnd);
 bool is_magic_gen1(nfc_device *pnd);
 bool write_magic_gen1(void);
+void reset_mfc_buffer(void);
 
 int8_t test_keys(mifare_param *mp, bool test_block_0_only, bool test_key_a_only, bool test_key_b_only);
 bool if_tag_is_blank(nfc_iso14443a_info tag_info);

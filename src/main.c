@@ -540,6 +540,7 @@ bool write_magic_gen1(void)
     // Step 2: Send 16 Bytes Data
     memcpy(abtCmd, mtDump.amb[current_block].mbd.abtData, 16);
     res = nfc_initiator_transceive_bytes(r.pdi, abtCmd, 16, abtRx, sizeof(abtRx), 100);
+    (void)res;
 
     // Some Gen1 tags do not cleanly ACK data frames via PN532 in InCommunicateThru, so ignore errors
     fflush(stdout);
@@ -1155,9 +1156,6 @@ save_tag_data:
     fclose(pfDump);
     read_success = true;
   }
-
-read_success_label:
-  read_success = true;
 
 out:
   // Reset the "advanced" configuration to normal
