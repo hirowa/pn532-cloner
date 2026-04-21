@@ -66,6 +66,7 @@ void reset_mfc_buffer(void);
 
 int8_t test_keys(mifare_param *mp, bool test_block_0_only, bool test_key_a_only, bool test_key_b_only);
 bool if_tag_is_blank(nfc_iso14443a_info tag_info);
+bool load_mfc_file(char *file_name);
 void generate_file_name(char *name, uint8_t num_blocks, uint8_t uid_len, uint8_t *uid);
 void generate_key_file_name(char *name, uint8_t num_blocks, uint8_t uid_len, uint8_t *uid);
 bool is_first_block(uint32_t uiBlock);

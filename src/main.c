@@ -847,6 +847,7 @@ bool read_mfc()
     printf("This tag is already on file\n");
     printf("To re-read this file, please delete %s file and retry\n", file_name);
     printf("To write this tag to a new tag, please execute \"w %s\"\n", file_name);
+    load_mfc_file(file_name);
     return false;
   }
 
@@ -1205,7 +1206,7 @@ out:
   }
 }
 
-static bool load_mfc_file(char *file_name)
+bool load_mfc_file(char *file_name)
 {
   uint16_t total_blocks;
   uint8_t uid_len;
