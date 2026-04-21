@@ -774,14 +774,6 @@ bool read_mfc()
     return false;
   }
 
-  // Automatic Gen1 Detection for Reading
-  if (is_magic_gen1(r.pdi)) {
-    if (read_magic_gen1()) {
-       // After successful backdoor read, we can continue to save it
-       goto read_success_label; 
-    }
-  }
-
   // Test if a compatible MIFARE tag is used
   if (((t.nt.nti.nai.btSak & 0x08) == 0) && (t.nt.nti.nai.btSak != 0x01)) {
     printf("Only MIFARE Classic tags are supported\n");
@@ -858,6 +850,14 @@ bool read_mfc()
   }
 
   print_nfc_target(&t.nt, false);
+
+  // Automatic Gen1 Detection for Reading
+  if (is_magic_gen1(r.pdi)) {
+    if (read_magic_gen1()) {
+       // After successful backdoor read, we can continue to save it
+       goto save_tag_data; 
+    }
+  }
 
   // Test the facotry default keys
   remaining_keys_to_be_found = t.num_sectors * 2;
@@ -1138,6 +1138,7 @@ read_tag:
 
   memcpy(last_read_uid, t.nt.nti.nai.abtUid, 7);
 
+save_tag_data:
   if (!(pfDump = fopen(file_name, "wb"))) {
     fprintf(stderr, "Saving log file failed\n");
     return false;
